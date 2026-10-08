@@ -1,4 +1,5 @@
 #include "FreeInkDisplay.h"
+#include "StickyDisplayTrace.h"
 
 #include <BoardConfig.h>
 
@@ -22,6 +23,9 @@
 
 #if FREEINK_DRIVER_SSD1677
 #include "driver/Ssd1677Driver.h"
+#endif
+#if FREEINK_DRIVER_SSD2677
+#include "driver/Ssd2677Driver.h"
 #endif
 #if FREEINK_DRIVER_UC8253_X3
 #include "driver/Uc8253X3Driver.h"
@@ -145,6 +149,12 @@ void FreeInkDisplay::selectDriver() {
 #endif
     case PanelSel::X4:
     default:
+#if FREEINK_DRIVER_SSD2677
+      if (BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::SSD2677) {
+        _driver = &ssd2677Driver();
+        break;
+      }
+#endif
 #if FREEINK_DRIVER_UC8179
       // Newer X4 / X4 Pro batches swap the SSD1677 for an UltraChip part.
       // Which silicon a unit carries is decided before begin() by the boot-time
@@ -204,7 +214,25 @@ void FreeInkDisplay::begin() {
     // retained for source compatibility; the active profile supplies the wiring.
     const auto& d = BoardConfig::ACTIVE.display;
     const EpdPins pins{d.sclk, d.mosi, d.cs, d.dc, d.rst, d.busy, d.powerEnable};
-    _bus.begin(pins, _driver->spiHz(), _driver->busyPolarity(), _driver->spiMiso(), _driver->coCs());
+    if (BoardConfig::isSticky()) {
+      // Seeed's panel probe uses 0x70 and reads one byte over the shared SD MISO.
+      traceStickyDisplay("bus begin");
+      _bus.begin(pins, 20000000, BusyPolarity::ActiveLow, BoardConfig::ACTIVE.sd.miso,
+                  BoardConfig::ACTIVE.sd.cs);
+      traceStickyDisplay("bus ready");
+      _bus.reset(0, 20);
+      traceStickyDisplay("probe reset");
+      _bus.cmd(0x70);
+      const uint8_t chipId = _bus.readData8ThreeWire();
+      traceStickyDisplay("panel ID", chipId, true);
+      BoardConfig::ACTIVE.displayController = chipId == 0x07 ? BoardConfig::DisplayController::SSD2677
+                                                            : BoardConfig::DisplayController::SSD1677;
+      BoardConfig::ACTIVE.displayControllerVariant = chipId;
+      selectDriver();
+      _bus.configure(_driver->spiHz(), _driver->busyPolarity());
+    } else {
+      _bus.begin(pins, _driver->spiHz(), _driver->busyPolarity(), _driver->spiMiso(), _driver->coCs());
+    }
   }
 
   const PanelGeometry geom = _driver->geometry();
@@ -230,7 +258,9 @@ void FreeInkDisplay::begin() {
   if (frameBuffer1) memset(frameBuffer1, 0xFF, bufferSize);
 #endif
 
+  if (BoardConfig::isSticky()) traceStickyDisplay("driver begin");
   _driver->begin(_bus);
+  if (BoardConfig::isSticky()) traceStickyDisplay("driver begin returned");
 }
 
 // ============================================================================

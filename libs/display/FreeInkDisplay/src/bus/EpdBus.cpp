@@ -1,4 +1,5 @@
 #include "EpdBus.h"
+#include "../StickyDisplayTrace.h"
 
 #include <BoardConfig.h>
 #include <driver/gpio.h>
@@ -114,7 +115,14 @@ void EpdBus::begin(const EpdPins& pins, uint32_t spiHz, BusyPolarity busy, int8_
   digitalWrite(pins.dc, HIGH);
 }
 
-void EpdBus::reset(uint16_t extraSettleMs) {
+void EpdBus::configure(uint32_t spiHz, BusyPolarity busy) {
+  _spiHz = spiHz;
+  _busy = busy;
+  _spi = SPISettings(spiHz, MSBFIRST, SPI_MODE0);
+  pinMode(_pins.busy, busy == BusyPolarity::ActiveLow ? INPUT_PULLUP : INPUT);
+}
+
+void EpdBus::reset(uint16_t extraSettleMs, uint16_t lowMs) {
   if (BoardConfig::isOnePage()) {
     // OnePage shares GPIO27 between EPD reset and the SD/MIC power rail.
     // Pulsing it low after Storage.begin() cuts power to the mounted SD card,
@@ -136,7 +144,7 @@ void EpdBus::reset(uint16_t extraSettleMs) {
   setReset(true);
   delay(10);
   setReset(false);
-  delay(10);
+  delay(lowMs);
   setReset(true);
   delay(10);
   if (extraSettleMs) {
@@ -169,6 +177,49 @@ void EpdBus::data(const uint8_t* d, uint16_t len) {
   SPI.writeBytes(d, len);
   digitalWrite(_pins.cs, HIGH);
   SPI.endTransaction();
+}
+
+uint8_t EpdBus::readData8() {
+  SPI.beginTransaction(_spi);
+  digitalWrite(_pins.dc, HIGH);
+  digitalWrite(_pins.cs, LOW);
+  const uint8_t value = SPI.transfer(0);
+  digitalWrite(_pins.cs, HIGH);
+  SPI.endTransaction();
+  return value;
+}
+
+uint8_t EpdBus::readData8ThreeWire() {
+  // SSD2677 returns data on the shared MOSI/SDI pin. Keep the shared SPI
+  // transaction lock while the clock and data pins are temporarily GPIOs.
+  SPI.beginTransaction(_spi);
+  spi_t* spi = SPI.bus();
+  spiDetachMOSI(spi);
+  spiDetachSCK(spi);
+  pinMode(_pins.mosi, INPUT_PULLUP);
+  pinMode(_pins.sclk, OUTPUT);
+  digitalWrite(_pins.sclk, LOW);
+  digitalWrite(_pins.dc, HIGH);
+  digitalWrite(_pins.cs, LOW);
+
+  uint8_t value = 0;
+  for (uint8_t bit = 0; bit < 8; ++bit) {
+    delayMicroseconds(2);
+    digitalWrite(_pins.sclk, HIGH);
+    delayMicroseconds(2);
+    value = static_cast<uint8_t>((value << 1) | digitalRead(_pins.mosi));
+    digitalWrite(_pins.sclk, LOW);
+  }
+
+  digitalWrite(_pins.cs, HIGH);
+  const bool clockRestored = spiAttachSCK(spi, _pins.sclk);
+  const bool dataRestored = spiAttachMOSI(spi, _pins.mosi);
+  SPI.endTransaction();
+  if (!clockRestored || !dataRestored) {
+    traceStickyDisplay("SPI pin restore failed", 0, false, true);
+    return 0xFF;
+  }
+  return value;
 }
 
 void EpdBus::cmdData(uint8_t c, const uint8_t* d, uint16_t len) {
@@ -219,6 +270,15 @@ void EpdBus::rawWriteBytes(const uint8_t* d, uint16_t len) {
 }
 
 void EpdBus::waitBusy(const char* tag) { waitBusy(_busy, tag); }
+
+bool EpdBus::waitReadyLow(uint32_t timeoutMs) {
+  const unsigned long start = millis();
+  while (digitalRead(_pins.busy) == LOW) {
+    if (millis() - start >= timeoutMs) return false;
+    delay(10);
+  }
+  return true;
+}
 
 void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
   const unsigned long start = millis();

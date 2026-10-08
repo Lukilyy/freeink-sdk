@@ -38,14 +38,17 @@ class EpdBus {
   // coCs: a co-resident chip-select (e.g. the SD card sharing the SPI bus on
   // M5 PaperColor) that must be held de-asserted during panel transactions.
   void begin(const EpdPins& pins, uint32_t spiHz, BusyPolarity busy, int8_t spiMiso = -1, int8_t coCs = -1);
+  void configure(uint32_t spiHz, BusyPolarity busy);
 
   // Hardware reset pulse; extraSettleMs adds a post-reset settle (X3 needs 50 ms).
-  void reset(uint16_t extraSettleMs = 0);
+  void reset(uint16_t extraSettleMs = 0, uint16_t lowMs = 10);
 
   // Standalone command / data (each its own CS-framed transaction) — X4 style.
   void cmd(uint8_t c);
   void data(uint8_t d);
   void data(const uint8_t* d, uint16_t len);
+  uint8_t readData8();
+  uint8_t readData8ThreeWire();
 
   // Command followed by payload inside a single CS-low transaction — X3 style.
   void cmdData(uint8_t c, const uint8_t* d, uint16_t len);
@@ -61,6 +64,7 @@ class EpdBus {
   // Wait for a refresh/operation to finish using the configured (or given) polarity.
   void waitBusy(const char* tag = nullptr);
   void waitBusy(BusyPolarity p, const char* tag = nullptr);
+  bool waitReadyLow(uint32_t timeoutMs);
 
   // Like waitBusy(), but sleeps the calling task on a BUSY-edge interrupt and
   // wakes exactly on the completion edge instead of polling every 1 ms. For the

@@ -104,9 +104,8 @@
 #endif
 
 // --- 3) Derive panel drivers from the device set -----------------------------
-// Sticky reuses SSD1677: its 800x480 panel rides a 24-pin FPC whose GDR/RESE/BS1
-// + dual VSH1/VSH2 + external VGH/VGL/VSL/VCOM charge pump is the SSD1677
-// application circuit (same controller + resolution as X4 / de-link / OnePage).
+// Sticky batches use SSD1677 or SSD2677. Both drivers link into the Sticky
+// build; the panel ID read at display begin selects the matching controller.
 // X4 Pro is a distinct ESP32-S3 device (NOT the C3 X4): its 800x480 panel may
 // use SSD1677, UC8179, or UC8279, recovered from OEM firmware and hardware
 // references — see docs/xteink-x4pro-support.md.
@@ -115,6 +114,11 @@
 #define FREEINK_DRIVER_SSD1677 1
 #else
 #define FREEINK_DRIVER_SSD1677 0
+#endif
+#if FREEINK_DEVICE_STICKY
+#define FREEINK_DRIVER_SSD2677 1
+#else
+#define FREEINK_DRIVER_SSD2677 0
 #endif
 #if FREEINK_DEVICE_X3
 #define FREEINK_DRIVER_UC8253_X3 1
@@ -433,7 +437,8 @@ enum class DisplayController : uint8_t {
   IT8951 = 5,
   UC8279 = 6,
   UC8179 = 7,
-  UC8279C = 8  // EEGO A4 768x552 sibling of the UC8279 family (Uc8279cA4Driver)
+  UC8279C = 8,  // EEGO A4 768x552 sibling of the UC8279 family (Uc8279cA4Driver)
+  SSD2677 = 9
 };
 
 // Optional capacitive touch controller.
@@ -1430,11 +1435,9 @@ constexpr BoardProfile EEGO_A4 = {
 static_assert(EEGO_A4.displayWidth / 8 * EEGO_A4.displayHeight == 52992,
               "EEGO A4 framebuffer must be 52,992 bytes (768/8 x 552)");
 
-// --- Sticky (Seeed Sticky) — ESP32-S3R8, SSD1677 + GT911 touch ---------------
-// 3.97" 800x480 B/W e-paper on a 24-pin FPC, controller confirmed SSD1677 by the
-// vendor peripheral demo (pin_config.h: "E-paper SSD1677 (SPI)") — same driver,
-// controller, and resolution as X4/de-link; its GDR/RESE/BS1 + dual VSH1/VSH2 +
-// external VGH/VGL/VSL/VCOM charge pump is the SSD1677 reference circuit.
+// --- Sticky (Seeed Sticky) — ESP32-S3R8, SSD1677/SSD2677 + GT911 touch -------
+// 3.97" 800x480 B/W e-paper on a 24-pin FPC. The controller is identified from
+// its 0x70 revision register before the first display refresh.
 // Capacitive GT911 touch on its own I2C bus, MicroSD over SPI (shared display
 // bus), BQ27220 fuel gauge, PDM mic + buzzer. Pins are triple-sourced (V01
 // schematic 2026-06-05 + porting spec + vendor demo pin_config.h).
