@@ -180,11 +180,18 @@ void Ssd2677Driver::writeGray(EpdBus& bus, const uint8_t* base) {
         high = static_cast<uint8_t>(unchanged | light);
         low = static_cast<uint8_t>(unchanged | dark);
       }
+      // Baseline for the next fast diff. This panel's code is white only at 11
+      // and black only at 00, so a pixel counts as white where both bits are
+      // set; the mid-grays count as ink and the next update re-drives them.
+      if (_previous) _previous.get()[sourceIndex] = static_cast<uint8_t>(low & high);
       if (mirrorX) {
         high = reverseBits(high);
         low = reverseBits(low);
       }
-      packByte(high, low, &_transfer[buffered * 2]);
+      // The panel's 2-bit code puts the dark half in bit 1 (00 black, 01 light,
+      // 10 dark, 11 white), while the host's level bits put dark in the LSB
+      // plane. The two orders are reversed, so the LSB byte goes out first.
+      packByte(low, high, &_transfer[buffered * 2]);
       if (++buffered == CHUNK_BYTES) {
         bus.data(_transfer, buffered * 2);
         buffered = 0;
@@ -282,13 +289,16 @@ void Ssd2677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool, const unsi
   latchWaveform(bus, RefreshMode::Full, true);
   writeGray(bus, base);
   activate(bus, false);
-  _previousValid = false;
+  // writeGray() rebuilt _previous from the frame just activated, so the next
+  // fast refresh has a differential baseline instead of falling back to full.
+  _previousValid = _previous != nullptr;
   _grayValid = false;
 }
 
 void Ssd2677Driver::cleanupGrayscaleBuffers(EpdBus&, const uint8_t*) {
   _grayValid = false;
-  _previousValid = false;
+  // _previous describes the frame on the panel and stays valid whether or not a
+  // gray activation followed the plane upload.
 }
 
 void Ssd2677Driver::deepSleep(EpdBus& bus) {
